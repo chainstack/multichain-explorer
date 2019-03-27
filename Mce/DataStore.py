@@ -66,7 +66,11 @@ CONFIG_DEFAULTS = {
 # MULTICHAIN START
     "home_refresh_interval_secs": 60,
     "recent_tx_interval_ms": 5000,
-    "catch_up_tx_interval_secs": 60
+    "catch_up_tx_interval_secs": 60,
+    "rpc": {
+        "user": "",
+        "connect": "127.0.0.1",
+    },
 # MULTICHAIN END
 }
 
@@ -113,6 +117,22 @@ class MalformedHash(ValueError):
 class MalformedAddress(ValueError):
     pass
 
+def get_rpc_url(rpc, chain, proto='https'):
+    defaults = CONFIG_DEFAULTS['rpc']
+
+    try:
+        options = {
+            'user': rpc.get('user', defaults['user']),
+            'password': rpc['password'],
+            'connect': rpc.get('connect', defaults['user']),
+            'port': rpc.get('port', chain.datadir_rpcport),
+            'proto': proto,
+        }
+
+        return '{proto}://{user}:{password}@{connect}:{port}'.format(**options)
+    except KeyError:
+        return None
+
 class DataStore(object):
 
     """
@@ -141,6 +161,7 @@ class DataStore(object):
             args.datadir = [args.datadir]
 
         store.args = args
+        store.rpc_options = args.rpc
         store.log = logging.getLogger(__name__)
 
         store.rpclog = logging.getLogger(__name__ + ".rpc")
@@ -548,7 +569,11 @@ class DataStore(object):
         return Chain.create(store.default_chain)
 
 # MULTICHAIN START
-    def get_url_by_chain(store, chain):
+    def get_url_by_chain_fallback(store, chain):
+        """
+        Fallback to getting rpc details from blockchain conf.
+        """
+
         dirname = store.get_dirname_by_id(chain.id)
         conffile = chain.datadir_conf_file_name
         conffile = os.path.join(dirname, conffile)
@@ -568,6 +593,11 @@ class DataStore(object):
         rpcport     = conf.get("rpcport", chain.datadir_rpcport)
         url = "http://" + rpcuser + ":" + rpcpassword + "@" + rpcconnect \
             + ":" + str(rpcport)
+        return url
+
+    def get_url_by_chain(store, chain):
+        url = get_rpc_url(store.rpc_options, chain) or store.get_url_by_chain_fallback(store, chain)
+
         return url
 
     def get_multichain_name_by_id(store, chain_id):
@@ -2931,24 +2961,27 @@ store._ddl['txout_approx'],
             return False
         chain = store.chains_by.id[chain_id]
 
-        conffile = dircfg.get('conf') or chain.datadir_conf_file_name
-        conffile = os.path.join(dircfg['dirname'], conffile)
-        try:
-            conf = dict([line.strip().split("=", 1)
-                         if "=" in line
-                         else (line.strip(), True)
-                         for line in open(conffile)
-                         if line != "" and line[0] not in "#\r\n"])
-        except Exception, e:
-            store.log.error("failed to load %s: %s", conffile, e)
-            return False
+        url = get_rpc_url(store.rpc_options, chain)
 
-        rpcuser     = conf.get("rpcuser", "")
-        rpcpassword = conf["rpcpassword"]
-        rpcconnect  = conf.get("rpcconnect", "127.0.0.1")
-        rpcport     = conf.get("rpcport", chain.datadir_rpcport)
-        url = "http://" + rpcuser + ":" + rpcpassword + "@" + rpcconnect \
-            + ":" + str(rpcport)
+        if not url:
+            conffile = dircfg.get('conf') or chain.datadir_conf_file_name
+            conffile = os.path.join(dircfg['dirname'], conffile)
+            try:
+                conf = dict([line.strip().split("=", 1)
+                             if "=" in line
+                             else (line.strip(), True)
+                             for line in open(conffile)
+                             if line != "" and line[0] not in "#\r\n"])
+            except Exception, e:
+                store.log.error("failed to load %s: %s", conffile, e)
+                return False
+
+            rpcuser     = conf.get("rpcuser", "")
+            rpcpassword = conf["rpcpassword"]
+            rpcconnect  = conf.get("rpcconnect", "127.0.0.1")
+            rpcport     = conf.get("rpcport", chain.datadir_rpcport)
+            url = "https://" + rpcuser + ":" + rpcpassword + "@" + rpcconnect \
+                + ":" + str(rpcport)
 
 # MULTICHAIN START
         def rpc(func, *params):
