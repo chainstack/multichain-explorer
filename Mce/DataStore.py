@@ -6,12 +6,12 @@
 # it under the terms of the GNU Affero General Public License as
 # published by the Free Software Foundation, either version 3 of the
 # License, or (at your option) any later version.
-# 
+#
 # This program is distributed in the hope that it will be useful, but
 # WITHOUT ANY WARRANTY; without even the implied warranty of
 # MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
 # Affero General Public License for more details.
-# 
+#
 # You should have received a copy of the GNU Affero General Public
 # License along with this program.  If not, see
 # <http://www.gnu.org/licenses/agpl.html>.
@@ -70,6 +70,8 @@ CONFIG_DEFAULTS = {
     "rpc": {
         "user": "",
         "connect": "127.0.0.1",
+        "port": 443,
+        "proto": "https"
     },
 # MULTICHAIN END
 }
@@ -117,7 +119,7 @@ class MalformedHash(ValueError):
 class MalformedAddress(ValueError):
     pass
 
-def get_rpc_url(rpc, chain, proto='https'):
+def get_rpc_url(rpc, chain):
     defaults = CONFIG_DEFAULTS['rpc']
 
     try:
@@ -125,8 +127,8 @@ def get_rpc_url(rpc, chain, proto='https'):
             'user': rpc.get('user', defaults['user']),
             'password': rpc['password'],
             'connect': rpc.get('connect', defaults['user']),
-            'port': rpc.get('port', chain.datadir_rpcport),
-            'proto': proto,
+            'port': rpc.get('port', defaults['port']),
+            'proto': defaults['proto']
         }
 
         return '{proto}://{user}:{password}@{connect}:{port}'.format(**options)
@@ -447,7 +449,18 @@ class DataStore(object):
                             store.log.error("failed to load %s: %s", paramsfile, e)
                             paramsdat_broken = True
 
-                        if paramsdat_broken is False:
+                            url = store.get_url_by_chain(chain_name)
+                            multichain_name = store.get_multichain_name_by_id(chain_id)
+
+                            try:
+                                params = util.jsonrpc(multichain_name, url, "getblockchainparams")
+                                assert(len(params['chain-protocol']) > 0)   # if we get invalid result, an exception is thrown
+                                store.log.info("Fetched blockchainparams via RPC for %s", chain_name)
+                                got_params_via_rpc = True
+                            except Exception as e:
+                                store.rpclog.exception("Failed to fetch blockchainparams via RPC for %s", chain_name)
+
+                        if paramsdat_broken is False or got_params_via_rpc is True:
                             x = params.get("address-pubkeyhash-version","00").strip()
                             addr_vers = binascii.unhexlify(x)
                             x = params.get("address-scripthash-version","05").strip()
@@ -603,7 +616,7 @@ class DataStore(object):
     def get_multichain_name_by_id(store, chain_id):
         dirname = store.get_dirname_by_id( chain_id)
         if dirname is None:
-            return None
+            return store.args.datadir[0]['chain']
         return os.path.basename(dirname)
 
     def get_dirname_by_id(store, chain_id):
@@ -1970,7 +1983,7 @@ store._ddl['txout_approx'],
         dbhash = store.hashin(tx['hash'])
 
         #print "import_tx: {}".format(util.long_hex(tx['hash'][::-1]))
-                
+
         if 'size' not in tx:
             tx['size'] = len(tx['__data__'])
 
@@ -2071,7 +2084,7 @@ store._ddl['txout_approx'],
                                 address = util.hash_to_address(vers, pubkey_hash)
                             else:
                                 address = util.hash_to_address_multichain(vers, pubkey_hash, checksum)
-                            
+
                             asset_id=store.prefix_to_assetid_or_new(prefix, chain)
                             store.update_asset_address_balance(asset_id, pubkey_id, quantity, tx['hash']);
 
@@ -2079,7 +2092,7 @@ store._ddl['txout_approx'],
                                 INSERT INTO asset_txid (asset_id, tx_id, txout_pos)
                                 VALUES (?,?,?)""",
                             (asset_id, tx_id, pos))
-                            
+
                     elif opdrop_type==util.OP_DROP_TYPE_PERMISSION:
                         #print 'Permissions command detected'
                         pass
@@ -2141,7 +2154,7 @@ store._ddl['txout_approx'],
                        store.binin(txin['scriptSig']),
                        store.intin(txin['sequence'])) if store.keep_scriptsig
                       else (txin_id, tx_id, pos, txout_id))
-            
+
             if not is_coinbase and txout_id is None:
                 tx['unlinked_count'] += 1
                 store.sql("""
@@ -2169,7 +2182,7 @@ store._ddl['txout_approx'],
 
         #if binscript is None:
         #    print "Unlinked error: hash {} vout {}".format(util.long_hex(prevout_hash[::-1]), prevout_n)
-        
+
         if binscript is not None:
             spent_tx_hash = store.hashout(prevout_hash)     # reverse out, otherwise it is backwards
             vers = chain.address_version
@@ -2195,7 +2208,7 @@ store._ddl['txout_approx'],
                     opdrop_type, val = util.parse_op_drop_data(data, chain)
                     if opdrop_type==util.OP_DROP_TYPE_ISSUE_ASSET:
                         (prefix, ) = struct.unpack("<H", spent_tx_hash[0:2])
-                        
+
                         asset_id=store.prefix_to_assetid_or_new(prefix, chain)
                         store.update_asset_address_balance(asset_id, pubkey_id, -val, spender_hash)
 
@@ -2217,7 +2230,7 @@ store._ddl['txout_approx'],
                     elif opdrop_type==util.OP_DROP_TYPE_PERMISSION:
                         #print 'Spending tx with Permissions command'
                         pass
-                        
+
     def prefix_to_assetid_or_new(store, prefix, chain):
         row = store.selectrow("""
              SELECT asset_id FROM asset WHERE asset.prefix = ?
@@ -2231,7 +2244,7 @@ store._ddl['txout_approx'],
         else:
             asset_id = row[0]
         return asset_id
-    
+
     def update_asset_address_balance(store, asset_id, pubkey_id, quantity, tx_hash):
         store.sql("""
             INSERT OR IGNORE INTO asset_address_balance (asset_id, pubkey_id, balance)
@@ -2242,10 +2255,10 @@ store._ddl['txout_approx'],
                SET balance = balance + ?
              WHERE pubkey_id = ? AND asset_id =?
              """, (quantity, pubkey_id, asset_id))
-        #print "BAL: {} pubkey {} val {}".format(util.long_hex(tx_hash[::-1]), pubkey_id, quantity) 
-        
+        #print "BAL: {} pubkey {} val {}".format(util.long_hex(tx_hash[::-1]), pubkey_id, quantity)
+
 # MULTICHAIN END
-    
+
     def import_and_commit_tx(store, tx, is_coinbase, chain):
         try:
             tx_id = store.import_tx(tx, is_coinbase, chain)
@@ -2948,13 +2961,6 @@ store._ddl['txout_approx'],
         in the datadir table.
         """
 
-# MULTICHAIN START
-        # Expand ~ in multichain folder to user home directory
-        dircfg['dirname'] = os.path.expanduser(dircfg['dirname'])
-        # Extract chain name from last path component of multichain folder
-        chain_name = os.path.basename(dircfg['dirname'])
-# MULTICHAIN END
-
         chain_id = dircfg['chain_id']
         if chain_id is None:
             store.log.error("no chain_id")
@@ -2962,6 +2968,9 @@ store._ddl['txout_approx'],
         chain = store.chains_by.id[chain_id]
 
         url = get_rpc_url(store.rpc_options, chain)
+# MULTICHAIN START
+        chain_name = store.get_multichain_name_by_id(chain_id)
+# MULTICHAIN END
 
         if not url:
             conffile = dircfg.get('conf') or chain.datadir_conf_file_name
@@ -3020,10 +3029,17 @@ store._ddl['txout_approx'],
                 if height != 0:
                     return None
 
+                # Get genesis block
+                genesis_block_hash = get_blockhash(0)
+
+                # Extract raw transaction data from genesis block
+                rpc_tx_hex = rpc("getblock", genesis_block_hash, 2)["tx"][0]["hex"]
+
                 # The genesis transaction is unavailable.  This is
                 # normal.
                 import genesis_tx
-                rpc_tx_hex = genesis_tx.get(rpc_tx_hash)
+                if rpc_tx_hex is None:
+                    rpc_tx_hex = genesis_tx.get(rpc_tx_hash)
                 if rpc_tx_hex is None:
                     store.log.error("genesis transaction unavailable via RPC;"
                                     " see import-tx in abe.conf")
