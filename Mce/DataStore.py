@@ -3780,8 +3780,10 @@ store._ddl['txout_approx'],
         """
         result = -1
         countrow = store.selectrow("""
-            SELECT COUNT(DISTINCT(pubkey_hash)) FROM txout_detail WHERE chain_id = ?
-        """, (chain.id,))
+            SELECT COUNT(DISTINCT(pubkey.pubkey_hash))
+              FROM txout
+              LEFT JOIN pubkey ON (txout.pubkey_id = pubkey.pubkey_id)
+        """)
         if countrow:
             result = countrow[0]
             if result > 0:
