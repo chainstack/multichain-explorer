@@ -3780,8 +3780,10 @@ store._ddl['txout_approx'],
         """
         result = -1
         countrow = store.selectrow("""
-            SELECT COUNT(DISTINCT(pubkey_hash)) FROM txout_detail WHERE chain_id = ?
-        """, (chain.id,))
+            SELECT COUNT(DISTINCT(pubkey.pubkey_hash))
+              FROM txout
+              LEFT JOIN pubkey ON (txout.pubkey_id = pubkey.pubkey_id)
+        """)
         if countrow:
             result = countrow[0]
             if result > 0:
@@ -3940,12 +3942,14 @@ store._ddl['txout_approx'],
         """
         # Ignore coinbase transactions where there is no native currency
         rows = store.selectall("""
-            SELECT DISTINCT tx_hash
-            FROM txout_detail
-            WHERE chain_id=? AND pubkey_id != ?
-            ORDER BY block_height DESC, tx_id DESC
-            LIMIT ?
-        """, (chain.id, NULL_PUBKEY_ID, limit))
+            SELECT tx_hash
+	          FROM tx
+	          WHERE tx_id in (SELECT DISTINCT tx_id
+	            FROM txout
+	            WHERE pubkey_id != ?
+	            ORDER BY tx_id DESC
+	            LIMIT ?)
+        """, (NULL_PUBKEY_ID, limit))
 
         if rows is None:
              return []
